@@ -17,20 +17,26 @@ RepairRequest申請單
   vendor_technician
 """
 class RepairRequestStatus(str, enum.Enum):
+    CANCELLED = "cancelled"
     UNDER_REVIEW = "under_review"
-    APPROVE = "approve"
+    APPROVED_AND_UNDER_MAINTENANCE = "approve_and_under_maintenance"
     REJECTED = "rejected"
-    UNDER_MAINTENANCE = "under_maintenance"
     COMPLETED = "completed"
+"""
+可能的三條路徑:
+    UNDER_REVIEW → APPROVED_and_UNDER_MAINTENANCE → COMPLETED     資產管理主管
+    UNDER_REVIEW → REJECTED     資產管理主管
+    UNDER_REVIEW → CANCELLED    一般員工
+
+"""
 
 
 class RepairRequestBase(SQLModel):
-    status: RepairRequestStatus = RepairRequestStatus.UNDER_REVIEW
-    requested_at :datetime.date = Field( default_factory=datetime.datetime.now ) # 程式會在建立物件的那一瞬間去記錄當前時間。
-    reviewed_at :datetime.date | None = None
-    repair_solution:str | None = None 
-    fault_description :str # 故障描述是建立維修申請的必要資訊，因此設為必填
-    repair_date :datetime.date | None = None
+    requested_at :datetime.datetime  = Field( default_factory=datetime.datetime.now ) # 程式會在建立物件的那一瞬間去記錄當前時間。
+    reviewed_at :datetime.datetime  | None = None
+    completed_at: datetime.datetime  | None = None
+    repair_solution:str | None = None # 主管審核填寫內容
+    fault_description :str  # 故障描述是一般員工建立維修申請的必要資訊，因此設為必填
     repair_cost :float | None = None
     vendor_technician :str | None = None
 
@@ -43,10 +49,11 @@ class RepairRequestDB(RepairRequestBase,table = True):
     asset_id :int = Field(foreign_key="assets.asset_id")
     requester_id:int = Field(foreign_key="employees.employee_id") # 申請人編號
     reviewer_id : int | None = Field(default=None,foreign_key="employees.employee_id")  # 審查人編號 可為空
+    status: RepairRequestStatus = RepairRequestStatus.UNDER_REVIEW
 
 class RepairRequestPublic(RepairRequestBase):
     request_id : int 
-
+    status:RepairRequestStatus
     asset_id :int 
     requester_id:int # 申請人編號
     reviewer_id : int | None = None # 審查人編號 可為空
@@ -57,12 +64,14 @@ class RepairRequestCreate(SQLModel): # 前端建立申請單時提供的資料
     fault_description: str
     # 其餘欄位其實系統都能自己決定
 
+class RepairUpdated_Employ(SQLModel): # 給一般員工修改申請單
+    status: RepairRequestStatus  | None = None# 這邊是直接讓他便取消嗎? => Router 限制： status 如果有提供，就只能是 CANCELLED
+    fault_description :str | None = None
+    # asset_id 應該是不能換? 不能
 
-class RepairRequestUpdated(SQLModel): # 給維修審查人員／資產管理人員使用
+class RepairUpdated_Manager(SQLModel): # 給維修審查人員／資產管理人員使用
     status: RepairRequestStatus | None =None
-    reviewer_id: int | None = None
-    reviewed_at :datetime.date | None =None
     repair_solution:str | None =None
-    repair_date :datetime.date | None =None
     repair_cost :float | None =None 
     vendor_technician :str | None =None
+    

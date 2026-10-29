@@ -22,7 +22,12 @@ class Status(str, enum.Enum):
     IN_USE = "in_use"
     UNDER_MAINTENANCE = "under_maintenance"
     RETIRED = "retired"
-
+"""
+主管新增了 -> available 預設的方式ok
+有指派管理者的話->in_use ok
+員工申請了維修 -> under_maintenance
+主管刪除資產 -> retired ok
+"""
 class AssetBase(SQLModel):
     name :str
     category :str
@@ -34,18 +39,22 @@ class AssetBase(SQLModel):
     purchase_price : float
     warranty_expiry:datetime.date
     department : str
-    status : Status
 
-class AssetDb(AssetBase,table = True):
+class AssetDB(AssetBase,table = True):
     __tablename__ = "assets"
 
     asset_id : int | None = Field(default=None, primary_key=True)
     custodian_id : int | None = Field(default=None, foreign_key="employees.employee_id")
+    status : Status = Status.AVAILABLE
 
-
+    
 class AssetPublic(AssetBase):
     asset_id : int  
     custodian_id : int | None = None
+    status: Status
+
+class AssetCreate(AssetBase):
+    custodian_id: int | None = None
 
 class AssetUpdate(SQLModel):
     name :str | None =None
@@ -58,6 +67,5 @@ class AssetUpdate(SQLModel):
     purchase_price : float  | None =None
     warranty_expiry:datetime.date | None =None
     department : str | None =None
-    status : Status | None =None
     custodian_id: int | None = None
 
