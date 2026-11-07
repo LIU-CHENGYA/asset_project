@@ -1,6 +1,7 @@
 import enum
-import datetime
+from datetime import timezone,datetime
 from sqlmodel import Field, SQLModel
+from pydantic import AwareDatetime
 """
 RepairRequest申請單
   request_id — PK 申請單編號
@@ -32,9 +33,11 @@ class RepairRequestStatus(str, enum.Enum):
 
 
 class RepairRequestBase(SQLModel):
-    requested_at :datetime.datetime  = Field( default_factory=datetime.datetime.now ) # 程式會在建立物件的那一瞬間去記錄當前時間。
-    reviewed_at :datetime.datetime  | None = None
-    completed_at: datetime.datetime  | None = None
+    requested_at: AwareDatetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    ) # 程式會在建立物件的那一瞬間去記錄當前時間。
+    reviewed_at :AwareDatetime  | None = None
+    completed_at: AwareDatetime  | None = None
     repair_solution:str | None = None # 主管審核填寫內容
     fault_description :str  # 故障描述是一般員工建立維修申請的必要資訊，因此設為必填
     repair_cost :float | None = None

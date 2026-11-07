@@ -28,7 +28,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 # -------------------- Token Model --------------------
 class Token(BaseModel):
@@ -36,7 +36,7 @@ class Token(BaseModel):
     token_type: str
 
 
-class TokenData(Token):
+class TokenData(BaseModel):
     employee_id: int # 使用 employee_id 登入
 
 
@@ -80,7 +80,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     return encoded_jwt
 
 # -------------------- 取得目前登入者 --------------------
-async def get_current_user(session: SessionDep,token: Annotated[str, Depends(oauth2_scheme)]):
+def get_current_user(session: SessionDep,token: Annotated[str, Depends(oauth2_scheme)]):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -101,7 +101,7 @@ async def get_current_user(session: SessionDep,token: Annotated[str, Depends(oau
 
 # -------------------- 登入 API --------------------
 @router.post("/token")
-async def login_for_access_token(session: SessionDep,
+def login_for_access_token(session: SessionDep,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],) -> Token:
     # OAuth2 表單欄位名稱是 username，
     # 但這個專案把員工編號當成登入帳號。

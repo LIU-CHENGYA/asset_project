@@ -162,7 +162,7 @@ def update_asset(asset_id:int,asset_in:asset.AssetUpdate,session: SessionDep,cur
     # 檢查: 不允許非custodian_id的欄位被清空，設成nell
     for key,value in asset_data.items():
         if value is None and key != "custodian_id":
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,detail=f"{key} cannot be null",) # 傳入內容違反了商業邏輯
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,detail=f"{key} cannot be null",) # 傳入內容違反了商業邏輯
     asset_db.sqlmodel_update(asset_data) # 要更新的欄位字典
     session.add(asset_db)
     session.commit()

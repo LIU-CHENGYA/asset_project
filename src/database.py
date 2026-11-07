@@ -1,8 +1,6 @@
 import os
 from dotenv import load_dotenv
 from sqlmodel import SQLModel, Session, create_engine
-from typing import Annotated
-from fastapi import Depends
 
 # 載入 .env 檔案
 load_dotenv()

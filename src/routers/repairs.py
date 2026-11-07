@@ -38,10 +38,24 @@ def get_current_employee(current_user:CurrentUser):
 
 EmployeeUser = Annotated[ user.UserDB,Depends(get_current_employee)]
 
-## 員工提出申請單
+## 員工提出申請單 ## 問題: 如果取消申請 狀態變成cancel 但再申請一次 狀態還是cancel
 @router.post("/",response_model=repair.RepairRequestPublic)
 def create_repair_requests(request:repair.RepairRequestCreate,session:SessionDep, employee_user : EmployeeUser):
+    # 確認資產是否存在
+    asset_db = session.get(asset.AssetDB, request.asset_id)
+
+    if asset_db is None: 
+        raise HTTPException( status_code=404, detail="Asset not found")
+    
+    # 確認資產是否屬於目前登入員工
+    if asset_db.custodian_id != employee_user.employee_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="You can only submit repair requests for your own assets")
+    # 只有資產狀態為in-use才能申請維修
+    if asset_db.status != asset.Status.IN_USE:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="only asset in-used can  repair request")
+
     repair_db = repair.RepairRequestDB(asset_id= request.asset_id,fault_description=request.fault_description,requester_id=employee_user.employee_id)
+
     session.add(repair_db)
     session.commit()
     session.refresh(repair_db)
@@ -66,7 +80,7 @@ def get_my_repair_request(request_id:int,session:SessionDep,employee_user : Empl
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="repair_request not found")
     return requests 
 
-## 在尚未審核前員工可以修改申請單 包含取消申請 
+## 在尚未審核前員工可以修改申請單 包含取消申請  資產狀態都是in use
 @router.patch("/{request_id}",response_model=repair.RepairRequestPublic)
 def updated_request(request_id:int,request_in:repair.RepairUpdated_Employ,session:SessionDep,employee_user : EmployeeUser):
     statement = select(repair.RepairRequestDB).where(repair.RepairRequestDB.requester_id == employee_user.employee_id ,
@@ -79,15 +93,15 @@ def updated_request(request_id:int,request_in:repair.RepairUpdated_Employ,sessio
     # 員工只能取消申請，不能自行核准或開始維修 (也就是只能修改為取消)
     if "status" in repair_data:
         if repair_data["status"] != repair.RepairRequestStatus.CANCELLED:
-            raise HTTPException(status_code=status.HTTP_400_FORBIDDEN,detail="Employees can only cancel repair requests")
-        
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="Employees can only cancel repair requests")
+    
     # 不允許空的 PATCH
     if not repair_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No fields provided for update",
         )
-    
+
     repair_db.sqlmodel_update(repair_data)
 
     session.add(repair_db)
@@ -199,7 +213,12 @@ def review_request(request_id:int,request_in: repair.RepairUpdated_Manager,manag
         elif current_status == repair.RepairRequestStatus.APPROVED_AND_UNDER_MAINTENANCE: 
             if repair_data.get("status") != repair.RepairRequestStatus.COMPLETED:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="A maintenance request can only be completed")
+            
             repair_data["completed_at"] = datetime.now(timezone.utc)
+            asset_db = session.get(asset.AssetDB, request_db.asset_id)
+            if asset_db:
+                asset_db.status = asset.Status.IN_USE
+                session.add(asset_db)
 
         # 5. 已拒絕的工單只能補充維修說明
         elif current_status == repair.RepairRequestStatus.REJECTED: #如果為拒絕可以填上 "repair_solution" : 直接檢查更新欄位
@@ -224,3 +243,7 @@ def review_request(request_id:int,request_in: repair.RepairUpdated_Manager,manag
         raise # 把剛才捕捉到的例外原封不動再丟出去
 
 
+
+
+## 問題紀錄
+# 員工已經取消的申請單 
