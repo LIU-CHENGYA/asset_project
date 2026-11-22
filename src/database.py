@@ -5,7 +5,7 @@ from sqlmodel import SQLModel, Session, create_engine
 # 載入 .env 檔案
 load_dotenv()
 
-engine = create_engine(os.getenv("DATABASE_URL"), pool_pre_ping=True)
+engine = create_engine(os.getenv("DATABASE_URL","sqlite:///:memory:"), pool_pre_ping=True)
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)

@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "15432:5432"
     volumes:
       # 確保資料不會因為容器重啟而消失
       - postgres_data:/var/lib/postgresql/data
@@ -17,6 +17,15 @@ services:
       test: ["CMD","pg_isready", "-U", "myuser", "-d", "${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
+      retries: 5
+  redis:
+    image: redis:7-alpine
+    container_name: fastapi_redis
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
       retries: 5
 
   web:
@@ -31,6 +40,8 @@ services:
       - .:/app
       # 保護容器內的 Linux .venv 虛擬環境，不被本機覆蓋
       - /app/.venv
+    env_file:
+      - .env
     environment:
       - ENV=development
       # 資料庫連線字串，主機名直接寫 db (Docker 內部的 DNS 會自動解析)
@@ -42,6 +53,8 @@ services:
     depends_on:
       db:
         # 關鍵：確保 db 的 healthcheck 通過後，web 才會啟動
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:

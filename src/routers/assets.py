@@ -4,8 +4,10 @@ from sqlmodel import Session,select
 from ..models import asset,user
 from ..database import get_session
 from .auth import get_current_user
-# 先定義一組路由，之後再掛到主程式 App 上
-router = APIRouter(tags=["asset"],prefix="/assets",)
+from ..cache import user_specific_key_builder
+from fastapi_cache import FastAPICache # 類別/快遞總部大腦
+from fastapi_cache.decorator import cache
+router = APIRouter(tags=["asset"],prefix="/assets",) # 先定義一組路由，之後再掛到主程式 App 上
 
 # 執行這個 API 時，請先透過 get_session 取得資料庫 Session，再把它傳進函式
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -26,7 +28,8 @@ EmployeeUser = Annotated[ user.UserDB,Depends(get_current_employee)]
 ## 員工可以查看自己的所有資產
 
 @router.get("/my",response_model=list[asset.AssetPublic])
-def get_my_assets(session: SessionDep,current_user :EmployeeUser ):
+@cache(expire=300,namespace="assets", key_builder=user_specific_key_builder)
+async def get_my_assets(session: SessionDep,current_user :EmployeeUser ):
     statement = select(asset.AssetDB).where(asset.AssetDB.custodian_id == current_user.employee_id)
     asset_db = session.exec(statement).all()
     return asset_db
@@ -34,7 +37,8 @@ def get_my_assets(session: SessionDep,current_user :EmployeeUser ):
 ## 員工可以查看自己特定的資產
 ## 問題是 要如何確定這個asset_id 是這個員工的? => where條件?
 @router.get("/my/{asset_id}",response_model=asset.AssetPublic)
-def get_my_asset(asset_id: int,session: SessionDep,current_user :EmployeeUser ):
+@cache(expire=300,namespace="assets", key_builder=user_specific_key_builder)
+async def get_my_asset(asset_id: int,session: SessionDep,current_user :EmployeeUser ):
     statement = select(asset.AssetDB).where(asset.AssetDB.custodian_id == current_user.employee_id,asset.AssetDB.asset_id==asset_id)
     asset_db = session.exec(statement).first()
     if not asset_db:
@@ -53,21 +57,24 @@ ManagerUser = Annotated[ user.UserDB,Depends(get_current_manager)]
 ## 主管可以查看每一個員工的所有資產
 
 @router.get("/",response_model=list[asset.AssetPublic])
-def get_assets(session: SessionDep,current_user :ManagerUser ):
+@cache(expire=300, namespace="assets",key_builder=user_specific_key_builder)
+async def get_assets(session: SessionDep,current_user :ManagerUser ):
     statement = select(asset.AssetDB).order_by(asset.AssetDB.asset_id)
     asset_db = session.exec(statement).all()
     return asset_db
 
 ## 主管可以查看特定員工的所有資產
 @router.get("/by-custodian/{custodian_id}",response_model=list[asset.AssetPublic])
-def get_employee_asset(custodian_id:int,session: SessionDep,current_user :ManagerUser ):
+@cache(expire=300, namespace="assets",key_builder=user_specific_key_builder)
+async def get_employee_asset(custodian_id:int,session: SessionDep,current_user :ManagerUser ):
     statement = select(asset.AssetDB).where(asset.AssetDB.custodian_id==custodian_id).order_by(asset.AssetDB.asset_id)
     asset_db = session.exec(statement).all()
     return asset_db
 
 ## 主管可以查看任一asset_id 資產
 @router.get("/{asset_id}",response_model=asset.AssetPublic)
-def get_by_asset_id(asset_id:int,session: SessionDep,current_user :ManagerUser ):
+@cache(expire=300,key_builder=user_specific_key_builder)
+async def get_by_asset_id(asset_id:int,session: SessionDep,current_user :ManagerUser ):
     statement = select(asset.AssetDB).where(asset.AssetDB.asset_id==asset_id)
     asset_db = session.exec(statement).first()
 
@@ -79,7 +86,7 @@ def get_by_asset_id(asset_id:int,session: SessionDep,current_user :ManagerUser )
 
 ## 主管可以新增資產 =>保管者(一般員工)可加可不加
 @router.post("/",response_model=asset.AssetPublic)
-def create_asset(asset_in:asset.AssetCreate,session: SessionDep,current_user :ManagerUser,):
+async def create_asset(asset_in:asset.AssetCreate,session: SessionDep,current_user :ManagerUser,):
     initial_status = asset.Status.AVAILABLE
     
     # 驗證custodian_id
@@ -95,7 +102,7 @@ def create_asset(asset_in:asset.AssetCreate,session: SessionDep,current_user :Ma
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Custodian must be an employee",
             )
-        # 順便改資產的狀態 => 直接這樣指定正確嗎?
+        # 順便改資產的狀態 
         initial_status = asset.Status.IN_USE
 
     asset_db = asset.AssetDB.model_validate(asset_in) #model_validate是把普通的字典（或資料）驗證並轉成 Pydantic 模型（驗證並吃進去）
@@ -104,11 +111,16 @@ def create_asset(asset_in:asset.AssetCreate,session: SessionDep,current_user :Ma
     session.add(asset_db)
     session.commit()
     session.refresh(asset_db) # refresh() 取得資料庫生成的 asset_id。
+
+    # 變更成功後，直接清空 Redis 中此套件產生的所有快取
+    await FastAPICache.clear(namespace="assets")
+    print("🔥 檢測到資產資料變更，已精準重新整理 assets 命名空間之快取")
+
     return asset_db
 
 ## 主管修改資產內容
 @router.patch("/{asset_id}",response_model=asset.AssetPublic)
-def update_asset(asset_id:int,asset_in:asset.AssetUpdate,session: SessionDep,current_user :ManagerUser,):
+async def update_asset(asset_id:int,asset_in:asset.AssetUpdate,session: SessionDep,current_user :ManagerUser,):
     asset_db = session.get(asset.AssetDB,asset_id)
     if not asset_db:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -168,12 +180,16 @@ def update_asset(asset_id:int,asset_in:asset.AssetUpdate,session: SessionDep,cur
     session.commit()
     session.refresh(asset_db)
 
+    # 變更成功後，直接清空 Redis 中此套件產生的所有快取
+    await FastAPICache.clear(namespace="assets")
+    print("🔥 檢測到資產資料變更，已精準重新整理 assets 命名空間之快取")
+
     return asset_db
 
 
 # 主管刪除特定的資產
 @router.delete("/{asset_id}")
-def delete_asset(asset_id:int ,session: SessionDep,current_user :ManagerUser,):
+async def delete_asset(asset_id:int ,session: SessionDep,current_user :ManagerUser,):
     asset_db = session.get(asset.AssetDB,asset_id)
     if not asset_db:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -182,5 +198,10 @@ def delete_asset(asset_id:int ,session: SessionDep,current_user :ManagerUser,):
     session.add(asset_db)
     session.commit()
     session.refresh(asset_db)
+    
+    # ✨ 修正 4：精準清除命名空間
+    await FastAPICache.clear(namespace="assets")
+    await FastAPICache.clear(namespace="repairs")
+    print("🔥 檢測到資產資料變更，已精準重新整理 assets 命名空間之快取")
 
     return asset_db

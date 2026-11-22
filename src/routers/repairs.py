@@ -20,6 +20,9 @@ from ..models import repair,user,asset
 from ..database import get_session
 from .auth import get_current_user
 from datetime import datetime ,timezone
+from ..cache import user_specific_key_builder# 先定義一組路由，之後再掛到主程式 App 上
+from fastapi_cache import FastAPICache
+from fastapi_cache.decorator import cache
 
 router = APIRouter(tags=["repair-requests"],prefix="/repair-requests",)
 
@@ -40,7 +43,7 @@ EmployeeUser = Annotated[ user.UserDB,Depends(get_current_employee)]
 
 ## 員工提出申請單 ## 問題: 如果取消申請 狀態變成cancel 但再申請一次 狀態還是cancel
 @router.post("/",response_model=repair.RepairRequestPublic)
-def create_repair_requests(request:repair.RepairRequestCreate,session:SessionDep, employee_user : EmployeeUser):
+async def create_repair_requests(request:repair.RepairRequestCreate,session:SessionDep, employee_user : EmployeeUser):
     # 確認資產是否存在
     asset_db = session.get(asset.AssetDB, request.asset_id)
 
@@ -59,11 +62,17 @@ def create_repair_requests(request:repair.RepairRequestCreate,session:SessionDep
     session.add(repair_db)
     session.commit()
     session.refresh(repair_db)
+
+    # 變更成功後，直接清空 Redis 中此套件產生的所有快取
+    await FastAPICache.clear(namespace="repairs")
+    print("🔥 檢測到報修狀態變更，已刷新快取")
+
     return repair_db
 
 ## 員工查看自己所有的工單
 @router.get("/my",response_model=list[repair.RepairRequestPublic])
-def get_repair_request(session:SessionDep,employee_user : EmployeeUser):
+@cache(expire=300, namespace="repairs", key_builder=user_specific_key_builder)
+async def get_repair_request(session:SessionDep,employee_user : EmployeeUser):
     statement = select(repair.RepairRequestDB).where(repair.RepairRequestDB.requester_id == employee_user.employee_id)
     requests  = session.exec(statement).all()
     # if not requests :
@@ -73,7 +82,8 @@ def get_repair_request(session:SessionDep,employee_user : EmployeeUser):
 
 ## 員工查看自己特定的工單
 @router.get("/{request_id}",response_model=repair.RepairRequestPublic)
-def get_my_repair_request(request_id:int,session:SessionDep,employee_user : EmployeeUser):
+@cache(expire=300, namespace="repairs", key_builder=user_specific_key_builder)
+async def get_my_repair_request(request_id:int,session:SessionDep,employee_user : EmployeeUser):
     statement = select(repair.RepairRequestDB).where(repair.RepairRequestDB.requester_id == employee_user.employee_id , repair.RepairRequestDB.request_id == request_id)
     requests  = session.exec(statement).first()
     if not requests :
@@ -82,7 +92,7 @@ def get_my_repair_request(request_id:int,session:SessionDep,employee_user : Empl
 
 ## 在尚未審核前員工可以修改申請單 包含取消申請  資產狀態都是in use
 @router.patch("/{request_id}",response_model=repair.RepairRequestPublic)
-def updated_request(request_id:int,request_in:repair.RepairUpdated_Employ,session:SessionDep,employee_user : EmployeeUser):
+async def updated_request(request_id:int,request_in:repair.RepairUpdated_Employ,session:SessionDep,employee_user : EmployeeUser):
     statement = select(repair.RepairRequestDB).where(repair.RepairRequestDB.requester_id == employee_user.employee_id ,
                                                 repair.RepairRequestDB.request_id == request_id,
                                                 repair.RepairRequestDB.status == repair.RepairRequestStatus.UNDER_REVIEW,)
@@ -108,6 +118,11 @@ def updated_request(request_id:int,request_in:repair.RepairUpdated_Employ,sessio
     session.commit()
     session.refresh(repair_db)
 
+    # 變更成功後，直接清空 Redis 中此套件產生的所有快取
+    await FastAPICache.clear(namespace="assets")
+    await FastAPICache.clear(namespace="repairs")
+    print("🔥 檢測到資產與維修連動變更，已同時精準重置 assets 與 repairs 雙重快取")
+
     return repair_db
 
 
@@ -122,7 +137,8 @@ ManagerUser = Annotated[ user.UserDB,Depends(get_current_manager)]
 
 ## 資產管理主管查看所有員工的申請單
 @router.get("/",response_model=list[repair.RepairRequestPublic])
-def get_employee_all_request(manager_user:ManagerUser,session: SessionDep):
+@cache(expire=300, namespace="repairs", key_builder=user_specific_key_builder)
+async def get_employee_all_request(manager_user:ManagerUser,session: SessionDep):
     statement = select(repair.RepairRequestDB).order_by(repair.RepairRequestDB.request_id)
     requests_db = session.exec(statement).all()
 
@@ -131,7 +147,8 @@ def get_employee_all_request(manager_user:ManagerUser,session: SessionDep):
 
 ## 資產管理主管查看特定員工的所有申請單  
 @router.get("/by-employee/{requester_id}",response_model=list[repair.RepairRequestPublic],)
-def get_requests_by_employee(requester_id:int,manager_user:ManagerUser,session: SessionDep): # 有需要特別處理 manager_user 嗎? => 即使函式內沒有讀取 manager_user，FastAPI 仍會先執行 ManagerUser 的依賴，確認呼叫者的角色是主管。因此，這樣寫就已經有權限檢查。
+@cache(expire=300, namespace="repairs", key_builder=user_specific_key_builder)
+async def get_requests_by_employee(requester_id:int,manager_user:ManagerUser,session: SessionDep): # 有需要特別處理 manager_user 嗎? => 即使函式內沒有讀取 manager_user，FastAPI 仍會先執行 ManagerUser 的依賴，確認呼叫者的角色是主管。因此，這樣寫就已經有權限檢查。
     statement = select(repair.RepairRequestDB).where(repair.RepairRequestDB.requester_id == requester_id)
     requests_db = session.exec(statement).all()
     return requests_db
@@ -139,7 +156,8 @@ def get_requests_by_employee(requester_id:int,manager_user:ManagerUser,session: 
 
 ## 資產管理主管查看申請單 依工單狀態篩選
 @router.get("/by-status/{request_status}",response_model=list[repair.RepairRequestPublic])
-def get_requests_by_status(request_status:repair.RepairRequestStatus,manager_user:ManagerUser,session: SessionDep):
+@cache(expire=300, namespace="repairs", key_builder=user_specific_key_builder)
+async def get_requests_by_status(request_status:repair.RepairRequestStatus,manager_user:ManagerUser,session: SessionDep):
     statement = select(repair.RepairRequestDB).where(repair.RepairRequestDB.status == request_status)
     requests_db = session.exec(statement).all()
     return requests_db
@@ -157,8 +175,7 @@ def get_requests_by_status(request_status:repair.RepairRequestStatus,manager_use
 """
 ## 資產管理主管審核申請單
 @router.patch("/{request_id}/review",response_model=repair.RepairRequestPublic)
-def review_request(request_id:int,request_in: repair.RepairUpdated_Manager,manager_user:ManagerUser,session: SessionDep):
-
+async def review_request(request_id:int,request_in: repair.RepairUpdated_Manager,manager_user:ManagerUser,session: SessionDep):
     
     # 1. 取得資料庫中原本的工單 request_db
     request_db = session.get(repair.RepairRequestDB,request_id) 
@@ -236,14 +253,14 @@ def review_request(request_id:int,request_in: repair.RepairUpdated_Manager,manag
         # 7. 工單與資產一起提交
         session.commit()
         session.refresh(request_db)
+        # 2. 變更成功後，直接清空 Redis 中此套件產生的所有快取
+        await FastAPICache.clear(namespace="assets")
+        await FastAPICache.clear(namespace="repairs")
+        print("🔥 檢測到資產與維修連動變更，已同時精準重置 assets 與 repairs 雙重快取")
+    
         return request_db
     
     except Exception:
         session.rollback()
         raise # 把剛才捕捉到的例外原封不動再丟出去
 
-
-
-
-## 問題紀錄
-# 員工已經取消的申請單 

@@ -8,7 +8,15 @@ from ..main import app  # 引入你的 FastAPI app
 from ..models.user import UserDB,UserRole
 from ..routers.auth import get_password_hash
 
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.inmemory import InMemoryBackend
 
+@pytest.fixture(scope="session", autouse=True)
+def init_test_cache():
+    """在所有測試開始前，自動初始化記憶體型的 fastapi-cache"""
+    FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache-test")
+
+    
 # 1. 建立一個專門給測試用的記憶體 SQLite 資料庫
 test_engine = create_engine(
     "sqlite:///:memory:",

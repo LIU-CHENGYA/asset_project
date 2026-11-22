@@ -4,17 +4,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 import jwt
+import uuid
 from jwt.exceptions import InvalidTokenError
 from pwdlib import PasswordHash
 from pydantic import BaseModel
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status ,Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlmodel import Session
 
 from ..models import user
 from ..database import get_session
 
+def get_redis(request: Request):
+    return request.app.state.redis
 # -------------------- 基本設定 --------------------
 # 載入 .env 檔案
 load_dotenv()
@@ -71,16 +74,24 @@ def authenticate_user(session: SessionDep, employee_id: int, password: str):
 # -------------------- 建立 JWT --------------------
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
+
+    # 1. 計算過期時間 (exp)
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+
+    # 2. 加入 exp 與 jti 到 Payload 中 [為了 jwt 黑名單]
+    to_encode.update({
+        "exp": expire,
+        "jti": str(uuid.uuid4())  # 產生唯一的識別碼
+    })
+
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 # -------------------- 取得目前登入者 --------------------
-def get_current_user(session: SessionDep,token: Annotated[str, Depends(oauth2_scheme)]):
+async def get_current_user(session: SessionDep,token: Annotated[str, Depends(oauth2_scheme)],redis = Depends(get_redis)): # 【新增】注入 Redis
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -88,10 +99,23 @@ def get_current_user(session: SessionDep,token: Annotated[str, Depends(oauth2_sc
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        subject = payload.get("sub")
-        if subject is None:
+        # 1. 取出 sub (員工編號) 與 jti (Token 唯一 ID)
+        sub: str | None = payload.get("sub")
+        jti: str = payload.get("jti")
+
+        if sub is None or jti is None:
             raise credentials_exception
-        token_data = TokenData(employee_id=int(subject))
+        
+        # 【新增】檢查 jti 是否在 Redis 黑名單中
+        is_blacklisted = await redis.exists(f"blacklist:{jti}")
+        if is_blacklisted:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        token_data = TokenData(employee_id=int(sub))
     except (InvalidTokenError, ValueError, TypeError):
         raise credentials_exception
     db_user = get_user(session, token_data.employee_id)
@@ -127,3 +151,27 @@ def login_for_access_token(session: SessionDep,
     )
     return Token(access_token=access_token, token_type="bearer")
 
+# 新增 /logout 登出路由
+# [為了 jwt 黑名單]
+@router.post("/logout")
+async def logout(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    redis = Depends(get_redis)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        
+        if jti and exp:
+            # 計算這張 Token 還剩幾秒過期
+            now = datetime.now(timezone.utc).timestamp()
+            ttl = int(exp - now)
+            
+            # 只有在還沒過期時才需要寫入黑名單
+            if ttl > 0:
+                await redis.set(f"blacklist:{jti}", "revoked", ex=ttl)
+                
+        return {"message": "Successfully logged out"}
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
