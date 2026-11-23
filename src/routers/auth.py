@@ -35,11 +35,11 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 # -------------------- Token Model --------------------
 class Token(BaseModel):
-    access_token: str
+    access_token: str # 就是JWT
     token_type: str
 
 
-class TokenData(BaseModel):
+class TokenData(BaseModel): # 需要一個類別來接這些解碼後的資料
     employee_id: int # 使用 employee_id 登入
 
 
@@ -91,6 +91,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     return encoded_jwt
 
 # -------------------- 取得目前登入者 --------------------
+## 使用者已經登入，並且在 Request Header 裡帶著 JWT Token 過來時，後端驗證這個 Token，然後找出目前登入的是哪個使用者。
 async def get_current_user(session: SessionDep,token: Annotated[str, Depends(oauth2_scheme)],redis = Depends(get_redis)): # 【新增】注入 Redis
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -98,7 +99,7 @@ async def get_current_user(session: SessionDep,token: Annotated[str, Depends(oau
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM]) #decode是: 解碼 + 驗證
         # 1. 取出 sub (員工編號) 與 jti (Token 唯一 ID)
         sub: str | None = payload.get("sub")
         jti: str = payload.get("jti")
