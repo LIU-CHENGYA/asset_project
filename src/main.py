@@ -11,8 +11,8 @@ from .database import create_db_and_tables
 # lifespan（生命週期管理）和 @asynccontextmanager（非同步上下文管理器）
 # 是用來管理「應用程式啟動（Startup）」與「應用程式關閉（Shutdown）」
 
-### Redis → 需要建立與關閉連線，所以通常放在 lifespan
-### PostgreSQL → 通常只建立 Engine，真正需要時才開 Session，所以不用放在 lifespan
+### Redis：伺服器啟動時建立連線池，整個 App 共用，所以通常放在 lifespan
+### PostgreSQL → 伺服器啟動時建立 Engine，收到請求時才建立 Session，所以不用放在 lifespan
 
 @asynccontextmanager # 是一個 Python 內建的「函式/裝飾器（Decorator）」 ## 它會把函式轉換成所謂的「非同步內容管理器（async context manager）」
 async def lifespan(app: FastAPI):

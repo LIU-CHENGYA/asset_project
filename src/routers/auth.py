@@ -16,8 +16,8 @@ from sqlmodel import Session
 from ..models import user
 from ..database import get_session
 
-def get_redis(request: Request):
-    return request.app.state.redis
+def get_redis(request: Request): # request: Request : 目前這次 HTTP 請求的物件
+    return request.app.state.redis # 從 FastAPI 全域空間拿出先前存好的 Redis 連線
 # -------------------- 基本設定 --------------------
 # 載入 .env 檔案
 load_dotenv()
