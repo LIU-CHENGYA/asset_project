@@ -11,6 +11,9 @@ from .database import create_db_and_tables
 # lifespan（生命週期管理）和 @asynccontextmanager（非同步上下文管理器）
 # 是用來管理「應用程式啟動（Startup）」與「應用程式關閉（Shutdown）」
 
+### Redis → 需要建立與關閉連線，所以通常放在 lifespan
+### PostgreSQL → 通常只建立 Engine，真正需要時才開 Session，所以不用放在 lifespan
+
 @asynccontextmanager # 是一個 Python 內建的「函式/裝飾器（Decorator）」 ## 它會把函式轉換成所謂的「非同步內容管理器（async context manager）」
 async def lifespan(app: FastAPI):
     # FastAPI 啟動時執行
@@ -26,6 +29,8 @@ async def lifespan(app: FastAPI):
     await redis_client.ping()
 
     # [為了 jwt 黑名單]【新增這行】把 redis_client 存進 app.state，讓其他路由可以透過 Request 取得
+    # 把建立好的 Redis 連線池掛載到 FastAPI 應用程式的「全域共用空間（app.state）」裡，讓專案中所有檔案的 API 路由都能直接拿來用。
+    # 如果只有一般快取，不需要，因為FastAPICache已經拿到redis_client
     app.state.redis = redis_client
 
     # 3. 將連線客戶端注入到 fastapi-cache2 中
@@ -40,6 +45,10 @@ async def lifespan(app: FastAPI):
     print("正在關閉 Redis 連線...")
     await redis_client.close()
 
+    ### 建立 Redis 連線池
+    ### 測試 Redis 是否活著
+    ### 存到全域 (app.state)
+    ### 關閉時再釋放
 
 app = FastAPI(
     title="Asset Management System",
